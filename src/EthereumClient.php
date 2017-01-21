@@ -6,17 +6,33 @@
 
 namespace Ethereum;
 
+// TODO REMOVE UNNECESSARY.
+
+use Behat\Mink\Exception\Exception;
 use Drupal\Core\TypedData\Plugin\DataType\IntegerData;
 use Graze\GuzzleHttp\JsonRpc\Client as RpcClient;
 
 
 /*
- * PHP implementation of JSON RPC API.
+ * Ethereum JsonRPC API for PHP
  *
- * See:
- * https://github.com/ethereum/wiki/wiki/JSON-RPC
+ * Implements Ethereum JsonRPC API for PHP
+ *   https://github.com/ethereum/wiki/wiki/JSON-RPC
+ *
+ * This is the Guzzle implementation of ethereum-php-lib.
+ * https://github.com/digitaldonkey/ethereum-php-lib
+ *
+ * This part of the Drupal Ethereum Module:
+ * https://groups.drupal.org/ethereum
+ *
+ * For Schema check
+ *   https://github.com/ethjs/ethjs-schema
+ *
+ * Based on Brandon Telle's.
+ * https://github.com/btelle/ethereum-php
  */
 class EthereumClient {
+
 
   protected $id = 0;
 
@@ -42,17 +58,6 @@ class EthereumClient {
     }
   }
 
-  private function decode_hex($input) {
-
-    if (substr($input, 0, 2) == '0x') {
-      $input = substr($input, 2);
-    }
-    if (preg_match('/[a-f0-9]+/', $input)) {
-      return hexdec($input);
-    }
-    return $input;
-  }
-
   /**
    * web3_clientVersion().
    *
@@ -67,13 +72,20 @@ class EthereumClient {
   /**
    * web3_sha3().
    *
-   * Returns Keccak-256 (not the standardized SHA3-256) of the given data.
+   * Returns Keccak-256 of the given data.
+   *
+   * See:
+   * https://forum.ethereum.org/discussion/3110/how-does-one-determine-a-given-method-id-from-a-compiled-contract
    *
    * @param $input string - the data to convert into a SHA3 hash.
    *
    * @return String -  The SHA3 result of the given string.
    */
   public function web3_sha3($input) {
+
+    if (!($this->isValidQuantity($input) || $this->isValidData($input))) {
+      throw new \InvalidArgumentException($input . ' is not a valid quantity.');
+    }
     return $this->ether_request(__FUNCTION__, array($input));
   }
 
@@ -86,7 +98,7 @@ class EthereumClient {
    */
   public function net_version() {
 
-    // TODO TEST.
+    // TODO Returns Integer, but should return string. Explanation?
 
     return $this->ether_request(__FUNCTION__);
   }
@@ -110,7 +122,7 @@ class EthereumClient {
    * @return Int - number of connected peers.
    */
   function net_peerCount() {
-    return $this->decode_hex($this->ether_request(__FUNCTION__));
+    return $this->decode_hex_number($this->ether_request(__FUNCTION__));
   }
 
   /**
@@ -138,8 +150,7 @@ class EthereumClient {
   function eth_syncing() {
 
     // Todo Validate Return of object.
-    // Quantity must be $this->decode_hex().
-
+    // Quantity must be $this->decode_hex_number().
     $return = $this->ether_request(__FUNCTION__);
     return $return;
   }
@@ -183,7 +194,7 @@ class EthereumClient {
    * @return Integer - Number of hashes per second.
    */
   function eth_hashrate() {
-    return $this->decode_hex($this->ether_request(__FUNCTION__));
+    return $this->decode_hex_number($this->ether_request(__FUNCTION__));
   }
 
   /**
@@ -194,7 +205,7 @@ class EthereumClient {
    * @return Integer - QUANTITY of the current gas price in wei.
    */
   function eth_gasPrice() {
-    return $this->decode_hex($this->ether_request(__FUNCTION__));
+    return $this->decode_hex_number($this->ether_request(__FUNCTION__));
   }
 
   /**
@@ -207,6 +218,7 @@ class EthereumClient {
   function eth_accounts() {
 
     // TODO Fix? Infura dosn't support.
+
     return $this->ether_request(__FUNCTION__);
   }
 
@@ -215,14 +227,14 @@ class EthereumClient {
    *
    * Returns the number of most recent block.
    *
-   * @param $decode_hex Set FALSE to get Integer.
+   * @param $decode_hex_number Set FALSE to get Integer.
    *
    * @return String/Integer - Current block number the client is on.
    */
-  function eth_blockNumber($decode_hex = FALSE) {
+  function eth_blockNumber($decode_hex_number = FALSE) {
     $block = $this->ether_request(__FUNCTION__);
-    if ($decode_hex) {
-      $block = $this->decode_hex($block);
+    if ($decode_hex_number) {
+      $block = $this->decode_hex_number($block);
     }
     return $block;
   }
@@ -238,16 +250,20 @@ class EthereumClient {
    *   Integer block number, or the string "latest", "earliest" or "pending"
    *   See: https://github.com/ethereum/wiki/wiki/JSON-RPC#the-default-block-parameter
    *
-   * @param $decode_hex - Set FALSE to get Integer value.
+   * @param $decode_hex_number - Set FALSE to get Integer value.
    *
    * @return Integer - QUANTITY - integer of the current balance in wei.
    */
-  function eth_getBalance($address, $block='latest', $decode_hex=TRUE) {
+  function eth_getBalance($address, $block='latest', $decode_hex_number=TRUE) {
+
+    // Trow error if not valid.
+    $this->isValidAddress($address, TRUE);
+    $this->isBlockParam($block, TRUE);
 
     $balance = $this->ether_request(__FUNCTION__, array($address, $block));
 
-    if($decode_hex) {
-      $balance = $this->decode_hex($balance);
+    if($decode_hex_number) {
+      $balance = $this->decode_hex_number($balance);
     }
     return $balance;
   }
@@ -258,9 +274,7 @@ class EthereumClient {
    * Returns the value from a storage position at a given address.
    *
    * @param $address - DATA, 20 Bytes - address to check for balance.
-   *
    * @param $at - QUANTITY integer of the position in the storage.
-   *
    * @param $block - QUANTITY|TAG
    *   Integer block number, or the string "latest", "earliest" or "pending"
    *   See: https://github.com/ethereum/wiki/wiki/JSON-RPC#the-default-block-parameter
@@ -269,19 +283,30 @@ class EthereumClient {
    */
   function eth_getStorageAt($address, $at, $block='latest') {
 
+    // Trow error if not valid.
+    $this->isValidAddress($address, TRUE);
+    $this->isBlockParam($block, TRUE);
+
     // TODO How to test that?
 
     return $this->ether_request(__FUNCTION__, array($address, $at, $block));
   }
 
+
+  /**
+   * eth_getTransactionCount().
+   *
+   * Returns the number of transactions sent from an address.
+   */
+  // TODO
   // UNCLEAR: Compare 0x26dd6b7a2fff271aa7c5fe8cfb5ba0ab33f47408
   // Here (43TX) VS Etherscan (46TX)
   // Why there is a difference?
-  function eth_getTransactionCount($address, $block='latest', $decode_hex=FALSE) {
+  function eth_getTransactionCount($address, $block='latest', $decode_hex_number=FALSE) {
     $count = $this->ether_request(__FUNCTION__, array($address, $block));
 
-        if($decode_hex)
-            $count = $this->decode_hex($count);
+        if($decode_hex_number)
+            $count = $this->decode_hex_number($count);
 
         return $count;
   }
@@ -321,10 +346,32 @@ class EthereumClient {
     }
   }
 
+
+  /**
+   * eth_call().
+   *
+   * Executes a new message call immediately without creating a transaction on the block chain.
+   * See:
+   * https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_call
+   *
+   * @param Ethereum_Transaction $message - The transaction call object
+   * @param $at - QUANTITY integer of the position in the storage.
+   *
+   * @param $block - QUANTITY|TAG
+   *   Integer block number, or the string "latest", "earliest" or "pending"
+   *   See: https://github.com/ethereum/wiki/wiki/JSON-RPC#the-default-block-parameter
+   *
+   * @return ??? - DATA the value at this storage position.
+   */
   function eth_call($message, $block) {
-    if(!is_a($message, 'Ethereum_Message'))
-    {
-      throw new ErrorException('Message object expected');
+
+    // TODO
+
+    // Trow error if Block param not valid.
+    $this->isBlockParam($block, TRUE);
+
+    if(!is_a($message, 'Ethereum\Ethereum_Message')) {
+      throw new \InvalidArgumentException('Message object expected');
     }
     else
     {
@@ -335,7 +382,7 @@ class EthereumClient {
   function eth_estimateGas($message, $block) {
     if(!is_a($message, 'Ethereum_Message'))
     {
-      throw new ErrorException('Message object expected');
+      throw new \InvalidArgumentException('Message object expected');
     }
     else
     {
@@ -393,7 +440,7 @@ class EthereumClient {
     return $this->ether_request(__FUNCTION__, array($code));
   }
 
-  function eth_newFilter($filter, $decode_hex=FALSE) {
+  function eth_newFilter($filter, $decode_hex_number=FALSE) {
     if(!is_a($filter, 'Ethereum_Filter'))
     {
       throw new ErrorException('Expected a Filter object');
@@ -402,27 +449,27 @@ class EthereumClient {
     {
       $id = $this->ether_request(__FUNCTION__, $filter->toArray());
 
-      if($decode_hex)
-        $id = $this->decode_hex($id);
+      if($decode_hex_number)
+        $id = $this->decode_hex_number($id);
 
       return $id;
     }
   }
 
-  function eth_newBlockFilter($decode_hex=FALSE) {
+  function eth_newBlockFilter($decode_hex_number=FALSE) {
     $id = $this->ether_request(__FUNCTION__);
 
-    if($decode_hex)
-      $id = $this->decode_hex($id);
+    if($decode_hex_number)
+      $id = $this->decode_hex_number($id);
 
     return $id;
   }
 
-  function eth_newPendingTransactionFilter($decode_hex=FALSE) {
+  function eth_newPendingTransactionFilter($decode_hex_number=FALSE) {
     $id = $this->ether_request(__FUNCTION__);
 
-    if($decode_hex)
-      $id = $this->decode_hex($id);
+    if($decode_hex_number)
+      $id = $this->decode_hex_number($id);
 
     return $id;
   }
@@ -512,49 +559,342 @@ class EthereumClient {
   function shh_getMessages($id) {
     return $this->ether_request(__FUNCTION__, array($id));
   }
+
+
+  /* HELPER FUNCTIONS */
+
+
+
+  /**
+   * isValidAddress().
+   *
+   * Tests if the given string qualifies as a Ethereum address.
+   * (DATA, 20 Bytes - address)
+   *
+   * See:
+   * https://github.com/ethereum/wiki/wiki/JSON-RPC
+   *
+   * @param string - String to test for Address.
+   * @param Bool $throw - If TRUE we will throw en error.
+   *
+   * @return bool - TRUE if string is a Valid Address value or FALSE.
+   */
+  public function isValidAddress($address, $throw = FALSE) {
+
+    // Always ensure 0x prefix.
+    if (!$this->hasHexPrefix($address)) {
+      return FALSE;
+    }
+
+    // Address should be 20bytes=40 HEX-chars + prefix.
+    if (strlen($address) !== 42) {
+      return FALSE;
+    }
+    $return = ctype_xdigit (substr($address, strlen('0x')));
+
+    if (!$return && $throw) {
+      throw new \InvalidArgumentException($address . ' has invalid format.');
+    }
+    return $return;
+  }
+
+
+  /**
+   * isBlockParam().
+   *
+   * Validates default block parameter.
+   *
+   * The following options are possible for the defaultBlock parameter:
+   * HEX String - an integer block number
+   * String "earliest" for the earliest/genesis block
+   * String "latest" - for the latest mined block
+   * String "pending" - for the pending state/transactions
+   *
+   * See:
+   * https://github.com/ethereum/wiki/wiki/JSON-RPC#the-default-block-parameter
+   *
+   * @param string - String defaulp block parameter.
+   * @param Bool $throw - If TRUE we will throw en error.
+   *
+   * @return bool - TRUE if string is a valid param or FALSE.
+   */
+  public function isBlockParam($input, $throw = FALSE) {
+    $allowed_keywords = array(
+      'earliest',
+      'latest',
+      'pending',
+    );
+    if (in_array($input, $allowed_keywords)) {
+      return TRUE;
+    }
+    $return = $this->isValidAddress($input);
+    if (!$return && $throw) {
+      throw new \InvalidArgumentException($input . ' is not a valid block parameter.');
+    }
+    return $return;
+  }
+
+
+  /**
+   * ENCODE a HEX.
+   *
+   * See:
+   * https://github.com/ethereum/wiki/wiki/JSON-RPC#hex-value-encoding
+   *
+   * @param String|Number - to encode.
+   *
+   * @return String - Encoded.
+   *
+   */
+  public static function encode_hex($input) {
+
+    if (is_int($input)) {
+      $hex_str = dechex($input);
+    }
+    else if (is_string($input)){
+      $hex_str = EthereumClient::strToHex($input);
+    }
+    else {
+      throw new \InvalidArgumentException($input . ' is not a string or number.');
+    }
+    return '0x' . $hex_str;
+  }
+
+
+  /**
+   * Decodes a HEX encoded number.
+   *
+   * See:
+   * https://github.com/ethereum/wiki/wiki/JSON-RPC#hex-value-encoding
+   *
+   * @param string - String convert to number.
+   *
+   * @throws InvalidArgumentException if the provided argument not a HEX number.
+   *
+   * @return Integer - Decoded number.
+   *
+   */
+  public function decode_hex_number($input) {
+
+    // Ensure consistency.
+    if (substr($input, 0, 2) !== '0x') {
+      $hex_str = "0x" . $input;
+    }
+    else {
+      $hex_str = $input;
+    }
+
+    if (!$this->isValidQuantity($hex_str)) {
+      throw new \InvalidArgumentException($input . ' is not a valid quantity.');
+    }
+
+    // Un-prefix.
+    $hex_str = substr($hex_str, 2);
+    return hexdec($hex_str);
+  }
+
+
+
+  /**
+   * Tests if the given string HEX QUANTITY.
+   *
+   * See:
+   * https://github.com/ethereum/wiki/wiki/JSON-RPC#hex-value-encoding
+   *
+   * @param string - String to test for Hex.
+   *
+   * @return bool - TRUE if string is a Valid Hex value or FALSE.
+   */
+  public function isValidQuantity($str) {
+
+    // Always ensure 0x prefix.
+    if (!$this->hasHexPrefix($str)) {
+      return FALSE;
+    }
+
+    // Should always have at least one digit - zero is "0x0"
+    if (strlen($str) < 3) {
+      return FALSE;
+    }
+    return ctype_xdigit (substr($str, strlen('0x')));
+  }
+
+
+  /**
+   * Tests if the given string is a HEX UNFORMATTED DATA value.
+   *
+   * See:
+   * https://github.com/ethereum/wiki/wiki/JSON-RPC#hex-value-encoding
+   *
+   * @param string - String to test for Hex.
+   *
+   * @return bool - TRUE if string is a Valid Hex value or FALSE.
+   */
+  public function isValidData($str) {
+
+    // Always ensure 0x prefix.
+    if (!$this->hasHexPrefix($str)) {
+      return FALSE;
+    }
+
+    // Should always have at least one digit - zero is "0x0"
+    if (strlen($str) <= 3) {
+      return FALSE;
+    }
+
+    // Ensure two hex digits per byte.
+    if ((strlen($str)%2 != 0)) {
+      return FALSE;
+    }
+
+    return ctype_xdigit (substr($str, strlen('0x')));
+  }
+
+  /**
+   * Test if a string is prefixed with "0x".
+   *
+   * @param string - String to test prefix.
+   * @return bool - TRUE if string has "0x" prefix or FALSE.
+   */
+  public function hasHexPrefix($str) {
+    $prefix = '0x';
+    return substr($str, 0, strlen($prefix)) === $prefix;
+  }
+
+
+
+  /**
+   * getMethodSignature().
+   *
+   * Returns hash of the Smart contract method - it's signature.
+   *
+   * See:
+   * https://github.com/ethereum/wiki/wiki/Ethereum-Contract-ABI#function-selector
+   *
+   * @param String - Method signature.
+   * @return String - hash of signature.
+   */
+  public function getMethodSignature($input) {
+
+    if (!$this->isValidData($input)) {
+      $input = $this->encode_hex($input);
+    }
+    $keccac = $this->web3_sha3($input);
+    $prefix_length = strlen('0x');
+    // The Method signature is 4bytes of the methods keccac hash.
+    return '0x' . substr($keccac, $prefix_length, 8);
+  }
+
+  /**
+   * Converts a string to Hex.
+   *
+   * @param String - to be converted.
+   *
+   * @return string - 0x-prefixed HEX representation.
+   */
+  public static function strToHex($string) {
+    $hex = unpack('H*', $string);
+    return array_shift($hex);
+  }
+
+  /**
+   * Converts Hex to string.
+   *
+   * @param String - Hex string to be converted.
+   *
+   * @return string -  String representation.
+   */
+  public static function hexToStr($string) {
+    $hex = substr($string, -40);
+    return $hex;
+  }
+
+
 }
 
-//  /**
-//  *	Ethereum transaction object
-//  */
-//  class Ethereum_Transaction
-//  {
-//  private $to, $from, $gas, $gasPrice, $value, $data, $nonce;
-//
-//  function __construct($from, $to, $gas, $gasPrice, $value, $data='', $nonce=NULL) {
-//    $this->from = $from;
-//    $this->to = $to;
-//    $this->gas = $gas;
-//    $this->gasPrice = $gasPrice;
-//    $this->value = $value;
-//    $this->data = $data;
-//    $this->nonce = $nonce;
-//  }
-//
-//  function toArray() {
-//    return array(
-//      array
-//      (
-//        'from'=>$this->from,
-//        'to'=>$this->to,
-//        'gas'=>$this->gas,
-//        'gasPrice'=>$this->gasPrice,
-//        'value'=>$this->value,
-//        'data'=>$this->data,
-//        'nonce'=>$this->nonce
-//      )
-//    );
-//  }
-//  }
-//
-//  /**
-//  *	Ethereum message -- Same as a transaction, except using this won't
-//  *  post the transaction to the blockchain.
-//  */
-//  class Ethereum_Message extends Ethereum_Transaction
-//  {
-//
-//  }
+  /**
+   *	Ethereum transaction object
+   *
+   * @param String $to_address - Ethereum address the transaction is directed to.
+   * @param String $from - Ethereum address the transaction is sent from.
+   * @param Integer $gas -  Gas provided for the transaction TODO EXPLAIN WEI/ETH??
+   * @param Integer $gasPrice - asPrice used for each paid gas. TODO EXPLAIN WEI/ETH??
+   * @param Integer $value - Ethereum address the transaction is directed to.
+   * @param String $data - Hash of the method signature and encoded parameters.
+   *   See: https://github.com/ethereum/wiki/wiki/Ethereum-Contract-ABI
+   * @param $nonce - Hash of the generated proof-of-work. null when its pending block (8 Bytes)
+   */
+  class Ethereum_Transaction {
+
+    private $to, $from, $gas, $gasPrice, $value, $data, $nonce;
+
+
+//  "SendTransaction": {
+//  "__required": ["from", "data"],
+//  "from": "D20",
+//  "to": "D20",
+//  "gas": "Q",
+//  "gasPrice": "Q",
+//  "value": "Q",
+//  "data": "D",
+//  "nonce": "Q"
+
+    // TODO RETHINK PROPPER DEFAULT VALUES !!!
+
+    function __construct(
+      $to_address,
+      $data = NULL,
+      $from = NULL,
+      $gas = NULL,
+      $gasPrice = NULL,
+      $value = NULL,
+      $nonce=NULL
+    ) {
+
+      $this->to = $to_address;
+      $this->from = $from;
+      $this->gas = $gas;
+      $this->gasPrice = $gasPrice;
+      $this->value = $value;
+      $this->data = $data;
+      $this->nonce = $nonce;
+    }
+
+    function toArray() {
+      return array (
+        array (
+          'from'=>$this->from,
+          'to'=>$this->to,
+          'gas'=>$this->gas,
+          'gasPrice'=>$this->gasPrice,
+          'value'=>$this->value,
+          'data'=>$this->data,
+          'nonce'=>$this->nonce
+        )
+      );
+    }
+
+    function setArgument($method, $value) {
+
+      if (strlen($method) != 10) {
+        throw new \InvalidArgumentException($method . ' should be a "0x" + 8 chars.');
+      }
+      if (!ctype_xdigit($value) || strlen($value) !== 32) {
+//        throw new \InvalidArgumentException($value . ' should be 16 char Hex encoded (32 chars).');
+      }
+
+      $this->data = $method . $value;
+    }
+  }
+
+  /**
+  *	Ethereum message -- Same as a transaction, except using this won't
+  *  post the transaction to the blockchain.
+  */
+  class Ethereum_Message extends Ethereum_Transaction {
+
+  }
+
 //
 //  /**
 //  *	Ethereum transaction filter object
